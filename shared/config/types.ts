@@ -70,4 +70,6 @@ export type IConstants = {
     };
     PEERS_COUNT_FOR_DISCOVER: number;
     PRE_MINED_ACCOUNTS: Array<Address>;
+    MIN_CONSENSUS: number;
+    TIMEOUT_START_PEER_CONNECT: number;
 };

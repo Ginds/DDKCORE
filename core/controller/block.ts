@@ -27,7 +27,7 @@ interface BlockGenerateRequest {
 
 class BlockController extends BaseController {
 
-    @MAIN('BLOCK_RECEIVE')
+    @MAIN(ActionTypes.BLOCK_RECEIVE)
     public async onReceiveBlock(action: { data: { block: BlockModel } }): Promise<ResponseEntity<void>> {
         const { data } = action;
         data.block.transactions = data.block.transactions.map(trs => SharedTransactionRepo.deserialize(trs));

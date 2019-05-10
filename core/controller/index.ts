@@ -12,12 +12,15 @@ import { logger } from 'shared/util/logger';
 import { timer } from 'rxjs';
 import config from 'shared/config';
 import { ResponseEntity } from 'shared/model/response';
+import { ActionTypes } from 'core/util/actionTypes';
 
 const UNLOCKED_METHODS: Set<string> = new Set(
     SyncController.eventsON.map(func => func.handlerTopicName)
 );
 
-UNLOCKED_METHODS.add('transactionsSaved');
+UNLOCKED_METHODS.add(ActionTypes.HEADERS_RECEIVE);
+UNLOCKED_METHODS.add(ActionTypes.REMOVE_PEER);
+UNLOCKED_METHODS.add(ActionTypes.PEER_CONNECT_RUN);
 
 type Event = {
     topicName: string;

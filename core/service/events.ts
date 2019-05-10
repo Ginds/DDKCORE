@@ -7,7 +7,7 @@ import config from 'shared/config';
 import { Address } from 'shared/model/types';
 import TransactionPool from 'core/service/transactionPool';
 import TransactionQueue from 'core/service/transactionQueue';
-import PeerRepository from 'core/repository/peer';
+import PeerRepository from 'core/repository/peer/peerNetwork';
 import { logger } from 'shared/util/logger';
 
 export type BlockchainInfo = {
@@ -54,7 +54,7 @@ class EventService {
     updateSystemInfo() {
         const height = BlockRepository.getLastBlock() ? BlockRepository.getLastBlock().height : 0;
         const broadhash = BlockRepository.getLastBlock() ? BlockRepository.getLastBlock().id : '';
-        const peersCount = PeerRepository.peerList().length;
+        const peersCount = PeerRepository.count;
 
         logger.debug(
             `[Server] Queue size: ${TransactionQueue.getSize().queue}, ` +

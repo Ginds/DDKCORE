@@ -76,8 +76,8 @@ const constants: IConstants = {
         MAX: 35,
         MIN: 12,
     },
-    TIMEOUT_START_SYNC_BLOCKS: 20000,
-    TIMEOUT_START_PEER_REQUEST: 10000,
+    TIMEOUT_START_SYNC_BLOCKS: 30000,
+    TIMEOUT_START_PEER_REQUEST: 20000,
     PEER_CONNECTION_TIME_INTERVAL_REBOOT: {
         MIN: 25 * 60 * 1000,
         MAX: 30 * 60 * 1000,
@@ -89,6 +89,8 @@ const constants: IConstants = {
         BigInt('933553974927686133'),
         BigInt('4995063339468361088')
     ],
+    MIN_CONSENSUS: 51,
+    TIMEOUT_START_PEER_CONNECT: 10000,
 };
 /* tslint:enable */
 

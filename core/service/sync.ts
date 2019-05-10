@@ -1,11 +1,8 @@
-import { Peer } from 'shared/model/peer';
 import { Block } from 'shared/model/block';
 import { Transaction } from 'shared/model/transaction';
 import SystemRepository from 'core/repository/system';
 import BlockService from 'core/service/block';
 import BlockRepository from 'core/repository/block/index';
-import PeerRepository from 'core/repository/peer';
-import SyncRepository, { ERROR_NOT_ENOUGH_PEERS } from 'core/repository/sync';
 import { TOTAL_PERCENTAGE } from 'core/util/const';
 import config from 'shared/config';
 import { logger } from 'shared/util/logger';
@@ -16,73 +13,115 @@ import SharedTransactionRepo from 'shared/repository/transaction';
 import BlockController from 'core/controller/block';
 import { ResponseEntity } from 'shared/model/response';
 import { getLastSlotInRound } from 'core/util/round';
+import PeerMemoryRepository from 'core/repository/peer/peerMemory';
+import PeerNetworkRepository from 'core/repository/peer/peerNetwork';
+import PeerService, { ERROR_NOT_ENOUGH_PEERS } from 'core/service/peer';
+import { ActionTypes } from 'core/util/actionTypes';
+import { BlockData, BlockLimit, PeerAddress } from 'shared/model/types';
+import { getRandom, getRandomElements } from 'core/util/common';
+import { NetworkPeer } from 'shared/model/Peer/networkPeer';
+import { MemoryPeer } from 'shared/model/Peer/memoryPeer';
 
-//  TODO get from env
-const MIN_CONSENSUS = 51;
+const MIN_CONSENSUS = config.CONSTANTS.MIN_CONSENSUS;
 
 export interface ISyncService {
 
-    sendPeers(peer: Peer, requestId): void;
+    sendPeers(peerAddress: PeerAddress, requestId): void;
 
     sendNewBlock(block: Block): void;
 
     sendUnconfirmedTransaction(trs: Transaction<any>): void;
 
-    checkCommonBlock(lastBlock: Block): Promise<ResponseEntity<{ isExist: boolean, peer?: Peer }>>;
+    checkCommonBlock(lastBlock: BlockData): Promise<ResponseEntity<{ isExist: boolean, peer?: MemoryPeer }>>;
 
-    requestBlocks(lastBlock: Block, peer: Peer): Promise<ResponseEntity<Array<Block>>>;
+    requestBlocks(lastBlock: Block, peer: PeerAddress): Promise<ResponseEntity<Array<Block>>>;
 
-    sendBlocks(data: { height: number, limit: number }, peer: Peer, requestId: string): void;
+    sendBlocks(data: { height: number, limit: number }, peer: PeerAddress, requestId: string): void;
 
 }
 
 export class SyncService implements ISyncService {
 
     consensus: boolean;
+    
+    async discoverPeers(): Promise<Array<PeerAddress & { peerCount: number }>> {
+        const fullNetworkPeerList = PeerNetworkRepository.getAll();
+        const randomNetworkPeers = getRandomElements(config.CONSTANTS.PEERS_COUNT_FOR_DISCOVER, fullNetworkPeerList);
+        const peersPromises = randomNetworkPeers.map((peer: NetworkPeer) => {
+            return peer.requestRPC(ActionTypes.REQUEST_PEERS, {});
+        });
 
-    sendPeers(peer, requestId): void {
-        SyncRepository.sendPeers(peer, requestId);
+        const peersResponses = await Promise.all(peersPromises);
+        const result = new Map();
+        peersResponses.forEach((response: ResponseEntity<Array<PeerAddress & { peerCount: number }>>) => {
+            if (response.success) {
+                response.data.forEach(peer => {
+                    result.set(`${peer.ip}:${peer.port}`, peer);
+                });
+            }
+        });
+        return [...result.values()];
+    }
+
+    sendPeers(peerAddress: PeerAddress, requestId): void {
+        const peer = PeerNetworkRepository.get(peerAddress);
+        const peerAddresses = PeerMemoryRepository.getPeerAddresses();
+        peer.responseRPC(ActionTypes.RESPONSE_PEERS, peerAddresses, requestId);
     }
 
     sendNewBlock(block: Block): void {
         block.relay += 1;
         if (block.relay < config.CONSTANTS.TRANSFER.MAX_RELAY) {
-            SyncRepository.sendNewBlock(block);
+            const serializedBlock: Block & { transactions: any } = block.getCopy();
+            serializedBlock.transactions = block.transactions.map(trs => SharedTransactionRepo.serialize(trs));
+            PeerService.broadcast(ActionTypes.BLOCK_RECEIVE, { block: serializedBlock });
         }
     }
 
     sendUnconfirmedTransaction(trs: Transaction<any>): void {
         trs.relay += 1;
         if (trs.relay < config.CONSTANTS.TRANSFER.MAX_RELAY) {
-            SyncRepository.sendUnconfirmedTransaction(trs);
+            PeerService.broadcast(
+                ActionTypes.TRANSACTION_RECEIVE,
+                { trs: SharedTransactionRepo.serialize(trs) }
+            );
         }
     }
 
-    async checkCommonBlock(lastBlock: Block): Promise<ResponseEntity<{ isExist: boolean, peer?: Peer }>> {
+    async checkCommonBlock(lastBlock: BlockData):
+        Promise<ResponseEntity<{ isExist: boolean, peerAddress?: PeerAddress }>> {
 
         const errors: Array<string> = [];
-        const filteredPeers = PeerRepository.getPeersByFilter(lastBlock.height, SystemRepository.broadhash);
+        const filteredMemoryPeers = PeerMemoryRepository.getMemoryPeersByFilter(
+            lastBlock.height,
+            SystemRepository.headers.broadhash
+        );
 
-        if (!filteredPeers.length) {
+        if (!filteredMemoryPeers.length) {
             return new ResponseEntity({ errors: [ERROR_NOT_ENOUGH_PEERS] });
         }
-
-        const randomPeer = PeerRepository.getRandomPeer(filteredPeers);
-        if (!randomPeer) {
-            errors.push(`random peer not found`);
-            return new ResponseEntity({ errors });
-        }
+        const randomMemoryPeer = getRandom(filteredMemoryPeers);
 
         if (this.checkBlockConsensus(lastBlock) || lastBlock.height === 1) {
 
-            return new ResponseEntity({ data: { isExist: true, peer: randomPeer } });
+            return new ResponseEntity({
+                data: {
+                    isExist: true,
+                    peerAddress: randomMemoryPeer.peerAddress
+                }
+            });
 
         } else {
 
-            const minHeight = Math.min(...randomPeer.blocksIds.keys());
-            if (minHeight > lastBlock.height) {
-                const response = await SyncRepository.requestCommonBlocks(
-                    { id: lastBlock.id, height: lastBlock.height }
+            if (randomMemoryPeer.minHeight > lastBlock.height) {
+                if (!PeerNetworkRepository.has(randomMemoryPeer.peerAddress)) {
+                    errors.push(`Peer ${randomMemoryPeer.peerAddress.ip} is offline`);
+                    return new ResponseEntity({ errors });
+                }
+                const networkPeer = PeerNetworkRepository.get(randomMemoryPeer.peerAddress);
+                const response = await networkPeer.requestRPC(
+                    ActionTypes.REQUEST_COMMON_BLOCKS,
+                    lastBlock
                 );
 
                 if (!response.success) {
@@ -90,45 +129,57 @@ export class SyncService implements ISyncService {
                     errors.push(...response.errors);
                     return new ResponseEntity({ errors });
                 }
-                const { isExist, peer } = response.data;
+                const { isExist } = response.data;
                 if (isExist) {
-                    return new ResponseEntity({ data: { peer, isExist } });
+                    return new ResponseEntity({ data: { peerAddress: networkPeer.peerAddress, isExist } });
                 }
             }
         }
         return new ResponseEntity({ data: { isExist: false } });
     }
 
-    async rollback() {
+    async rollback(): Promise<ResponseEntity<Block>> {
+
         const blockSlot = SlotService.getSlotNumber(BlockRepository.getLastBlock().createdAt);
         const prevRound = RoundRepository.getPrevRound();
         if (!prevRound) {
-            await BlockService.deleteLastBlock();
-            return;
+            return await BlockService.deleteLastBlock();
         }
         const lastSlotInRound = getLastSlotInRound(prevRound);
 
-        logger.debug(`[Controller][Sync][rollback] lastSlotInRound: ${lastSlotInRound}, blockSlot: ${blockSlot}`);
+        logger.debug(`[Service][Sync][rollback] lastSlotInRound: ${lastSlotInRound}, blockSlot: ${blockSlot}`);
 
         if (lastSlotInRound >= blockSlot) {
-            logger.debug(`[Controller][Sync][rollback] round rollback`);
+            logger.debug(`[Service][Sync][rollback] round rollback`);
             RoundService.backwardProcess();
         }
 
-        await BlockService.deleteLastBlock();
-        return;
+        return await BlockService.deleteLastBlock();
     }
 
-    async requestBlocks(lastBlock, peer): Promise<ResponseEntity<Array<Block>>> {
-        return SyncRepository.requestBlocks({
+    async requestBlocks(lastBlock, peerAddress): Promise<ResponseEntity<Array<Block>>> {
+        if (!PeerNetworkRepository.has(peerAddress)) {
+            return new ResponseEntity({ errors: [] });
+        }
+        const networkPeer = PeerNetworkRepository.get(peerAddress);
+        return await networkPeer.requestRPC(ActionTypes.REQUEST_BLOCKS, {
             height: lastBlock.height,
             limit: config.CONSTANTS.TRANSFER.REQUEST_BLOCK_LIMIT
-        }, peer);
+        });
     }
 
-    sendBlocks(data: { height: number, limit: number }, peer, requestId): void {
+    sendBlocks(data: BlockLimit, peerAddress: PeerAddress, requestId): void {
         const blocks = BlockRepository.getMany(data.limit, data.height);
-        SyncRepository.sendBlocks(blocks, peer, requestId);
+        const serializedBlocks: Array<Block & { transactions?: any }> = blocks.map(block => block.getCopy());
+        serializedBlocks.forEach(block => {
+            block.transactions = block.transactions.map(trs => SharedTransactionRepo.serialize(trs));
+        });
+        if (!PeerNetworkRepository.has(peerAddress)) {
+            logger.debug(`[Service][Sync][sendBlocks] peer is offline for response ${peerAddress.ip}`);
+            return;
+        }
+        const networkPeer = PeerNetworkRepository.get(peerAddress);
+        networkPeer.responseRPC(ActionTypes.RESPONSE_BLOCKS, serializedBlocks, requestId);
     }
 
     async loadBlocks(blocks: Array<Block>): Promise<ResponseEntity<any>> {
@@ -145,37 +196,47 @@ export class SyncService implements ISyncService {
         return new ResponseEntity();
     }
 
-    checkCommonBlocks(block: { id: string, height: number }, peer, requestId): void {
+    checkCommonBlocks(block: BlockData, peerAddress: PeerAddress, requestId): void {
         const isExist = BlockRepository.isExist(block.id);
-        SyncRepository.sendCommonBlocksExist({ isExist }, peer, requestId);
+        if (!PeerNetworkRepository.has(peerAddress)) {
+            logger.debug(`[Service][Sync][checkCommonBlocks] peer is offline for response ${peerAddress.ip}`);
+            return;
+        }
+        const networkPeer = PeerNetworkRepository.get(peerAddress);
+        networkPeer.responseRPC(ActionTypes.RESPONSE_COMMON_BLOCKS, { isExist }, requestId);
     }
 
     updateHeaders(lastBlock: Block) {
-        SystemRepository.setBroadhash(lastBlock);
+        SystemRepository.update({
+            broadhash: lastBlock.id,
+            height: lastBlock.height,
+        });
         SystemRepository.addBlockIdInPool(lastBlock);
-        SystemRepository.setHeight(lastBlock);
-        SyncRepository.sendHeaders(
+        logger.debug(`[Service][Sync][updateHeaders]: height ${lastBlock.height}, broadhash ${lastBlock.id}`);
+        PeerService.broadcast(
+            ActionTypes.PEER_HEADERS_UPDATE,
             SystemRepository.getHeaders()
         );
     }
 
-    getBlockConsensus(block: Block): number {
-        const peers = PeerRepository.peerList();
-        const commonPeers = peers.filter(peer => PeerRepository.checkCommonBlock(peer, block));
+    getBlockConsensus(block: BlockData): number {
+        const peers = PeerMemoryRepository.getAll();
+        const commonPeers = peers.filter(peer => peer.blockExist(block));
         if (!peers.length) {
             return 0;
         }
         return (commonPeers.length + 1) / (peers.length + 1) * TOTAL_PERCENTAGE;
     }
 
-    checkBlockConsensus(block: Block): boolean {
-        return this.getBlockConsensus(block) >= MIN_CONSENSUS;
+    checkBlockConsensus(blockData: BlockData): boolean {
+        return this.getBlockConsensus(blockData) >= MIN_CONSENSUS;
     }
 
     getConsensus(): number {
-        const peers = PeerRepository.peerList();
+        const peers = PeerMemoryRepository.getAll();
         const commonPeers = peers.filter(peer => {
-            return peer.broadhash === SystemRepository.broadhash;
+            return peer.headers.broadhash === SystemRepository.headers.broadhash &&
+                peer.headers.height === SystemRepository.headers.height;
         });
         if (!peers.length) {
             return 0;

@@ -10,7 +10,7 @@ import config, { NODE_ENV_ENUM } from 'shared/config';
 import BlockPGRepository from 'core/repository/block/pg';
 import BlockRepository from 'core/repository/block';
 import BlockService from 'core/service/block';
-import socket from 'core/repository/socket';
+import SocketDriver from 'core/driver/socket/index';
 import { logger } from 'shared/util/logger';
 import { Block } from 'shared/model/block';
 import { socketRPCServer } from 'core/api/server';
@@ -24,6 +24,8 @@ import { getLastSlotInRound } from 'core/util/round';
 import { MIN_ROUND_BLOCK } from 'core/util/block';
 import { getFirstSlotNumberInRound } from 'core/util/slot';
 import DelegateRepository from 'core/repository/delegate';
+import PeerController from 'core/controller/peer';
+import { ActionTypes } from 'core/util/actionTypes';
 
 // @ts-ignore
 BigInt.prototype.toJSON = function () {
@@ -51,7 +53,7 @@ class Loader {
             }
         }
         config.CORE.IS_HISTORY = historyState;
-        socket.init();
+        SocketDriver.initServer();
 
         initShedulers();
 

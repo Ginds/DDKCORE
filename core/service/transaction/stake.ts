@@ -12,7 +12,13 @@ import { TOTAL_PERCENTAGE } from 'core/util/const';
 import config from 'shared/config';
 import BUFFER from 'core/util/buffer';
 
-import { getAirdropReward, sendAirdropReward, undoAirdropReward, verifyAirdrop } from 'core/util/reward';
+import {
+    getAirdropReward,
+    sendAirdropReward,
+    undoAirdropReward,
+    verifyAirdrop,
+    isSponsorsExist
+} from 'core/util/reward';
 
 class TransactionStakeService implements IAssetService<IAssetStake> {
 
@@ -95,7 +101,9 @@ class TransactionStakeService implements IAssetService<IAssetStake> {
             airdropReward: trs.asset.airdropReward.sponsors,
             sourceTransactionId: trs.id
         }));
-        sendAirdropReward(trs);
+        if (isSponsorsExist(trs)) {
+            sendAirdropReward(trs);
+        }
     }
 
     undoUnconfirmed(trs: Transaction<IAssetStake>, sender: Account, senderOnly: boolean): void {
@@ -105,7 +113,7 @@ class TransactionStakeService implements IAssetService<IAssetStake> {
                 sender.stakes.splice(i, 1);
             }
         }
-        if (!senderOnly) {
+        if (!senderOnly && isSponsorsExist(trs)) {
             undoAirdropReward(trs);
         }
     }

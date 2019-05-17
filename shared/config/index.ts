@@ -89,6 +89,7 @@ class Config {
         IS_HISTORY: boolean;
         IS_DISABLED_TRANSACTION_CREATION: boolean;
         VERSION: string;
+        IS_REFERRED_USERS_ENABLED: boolean;
     };
     API: {
         REQUESTS_PER_SECOND_LIMIT: number;
@@ -149,6 +150,7 @@ class Config {
             IS_HISTORY: process.env.IS_HISTORY === 'TRUE',
             IS_DISABLED_TRANSACTION_CREATION: process.env.IS_DISABLED_TRANSACTION_CREATION === 'TRUE',
             VERSION: '0.0.1',
+            IS_REFERRED_USERS_ENABLED: process.env.IS_REFERRED_USERS_ENABLED  === 'TRUE',
         };
         this.API = {
             REQUESTS_PER_SECOND_LIMIT: Number(process.env.REQUESTS_PER_SECOND_LIMIT) ||
